@@ -47,36 +47,10 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: !Ref MyIP
-  WebServerRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: ReadWebsiteContent
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: s3:ListBucket
-                Resource: !GetAtt WebsiteBucket.Arn
-              - Effect: Allow
-                Action: s3:GetObject
-                Resource: !Sub '${WebsiteBucket.Arn}/*'
-  WebServerInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      Roles:
-        - !Ref WebServerRole
   WebServer:
     Type: AWS::EC2::Instance
     Properties:
-      IamInstanceProfile: !Ref WebServerInstanceProfile
+      IamInstanceProfile: LabInstanceProfile
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref InstanceType
       SecurityGroupIds:
