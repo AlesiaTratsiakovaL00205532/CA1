@@ -47,7 +47,7 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: !Ref MyIP
-  WebServer:
+  WebsiteServer:
     Type: AWS::EC2::Instance
     Properties:
       IamInstanceProfile: LabInstanceProfile
@@ -55,12 +55,55 @@ Resources:
       InstanceType: !Ref InstanceType
       SecurityGroupIds:
         - !Ref WebServerSecurityGroup
-      UserData: !Base64 |
-        #!/bin/bash
-        set -euo pipefail
-        dnf install -y httpd
-        echo "<html><body><h1>Hello World!</h1></body></html>" > /var/www/html/index.html
-        systemctl enable --now httpd
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          dnf install -y httpd awscli2
+
+          # Download safely: replace the live page only after a successful transfer.
+          cat > /usr/local/bin/update-website <<'SCRIPT'
+          #!/bin/bash
+          set -euo pipefail
+          temp_file=$(mktemp /var/www/html/.index.XXXXXX)
+          trap 'rm -f "$temp_file"' EXIT
+
+          aws s3 cp 's3://${WebsiteBucket}/index.html' "$temp_file" \
+            --region '${AWS::Region}' --only-show-errors
+          test -s "$temp_file"
+          chmod 644 "$temp_file"
+          mv -f "$temp_file" /var/www/html/index.html
+          systemctl enable --now httpd
+          SCRIPT
+          chmod 755 /usr/local/bin/update-website
+
+          cat > /etc/systemd/system/website-update.service <<'SERVICE'
+          [Unit]
+          Description=Download the website page from S3
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/update-website
+          SERVICE
+
+          # Retry failed downloads and pick up subsequent content updates.
+          cat > /etc/systemd/system/website-update.timer <<'TIMER'
+          [Unit]
+          Description=Check S3 for website content every minute
+
+          [Timer]
+          OnBootSec=30s
+          OnUnitInactiveSec=60s
+          Unit=website-update.service
+
+          [Install]
+          WantedBy=timers.target
+          TIMER
+
+          systemctl daemon-reload
+          systemctl enable --now website-update.timer
 
 Outputs:
   WebsiteBucketName:
@@ -70,5 +113,5 @@ Outputs:
     Value: !Join
       - ''
       - - http://
-        - !GetAtt WebServer.PublicDnsName
+        - !GetAtt WebsiteServer.PublicDnsName
     Description: Website URL
