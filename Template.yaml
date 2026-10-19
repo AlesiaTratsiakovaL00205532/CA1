@@ -2,6 +2,14 @@ AWSTemplateFormatVersion: 2010-09-09
 Description: CloudFormation Template for WebServer with Security Group and EC2 Instance
 
 Parameters:
+  ExistingInstanceProfileName:
+    Description: Name of an existing IAM instance profile with access to read the website bucket
+    Type: String
+    Default: LabInstanceProfile
+    MinLength: 1
+    MaxLength: 128
+    AllowedPattern: '^[A-Za-z0-9_+=,.@-]+$'
+    ConstraintDescription: Enter a valid IAM instance profile name, not an ARN.
   LatestAmiId:
     Description: Latest Amazon Linux 2023 x86-64 AMI from AWS Systems Manager Parameter Store
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
@@ -38,6 +46,23 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt WebsiteBucket.Arn
+              - !Sub '${WebsiteBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
   WebServerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -50,7 +75,18 @@ Resources:
   WebsiteServer:
     Type: AWS::EC2::Instance
     Properties:
-      IamInstanceProfile: LabInstanceProfile
+      IamInstanceProfile: !Ref ExistingInstanceProfileName
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            Encrypted: true
+            VolumeType: gp3
+            VolumeSize: 8
+            DeleteOnTermination: true
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref InstanceType
       SecurityGroupIds:
