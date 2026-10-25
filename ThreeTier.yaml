@@ -111,6 +111,7 @@ Resources:
       SubnetId: !Ref ApplicationSubnet
       RouteTableId: !Ref ApplicationRouteTable
 
+  # No internet default route is added for the database subnets.
   DatabaseRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -134,6 +135,7 @@ Resources:
     Properties:
       Domain: vpc
 
+  # Outbound internet access without a public IP on the server.
   ApplicationNatGateway:
     Type: AWS::EC2::NatGateway
     DependsOn:
@@ -186,6 +188,7 @@ Resources:
           ToPort: 3306
           SourceSecurityGroupId: !GetAtt ApplicationSecurityGroup.GroupId
 
+  # Two AZs are required for the subnet group, even with Single-AZ RDS.
   DatabaseSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
@@ -207,6 +210,7 @@ Resources:
 
       DBName: guestbook
       MasterUsername: guestbookadmin
+      # Resolve the existing encrypted parameter
       MasterUserPassword: !Sub '{{resolve:ssm-secure:${DatabasePasswordParameterName}}}'
 
       DBSubnetGroupName: !Ref DatabaseSubnetGroup

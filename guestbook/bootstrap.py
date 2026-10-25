@@ -70,6 +70,7 @@ def main():
                 "TO 'guestbookapp'@'%'"
             )
 
+    # The API looks through this directory to get the public CA certificate.
     config_directory = Path("/etc/guestbook")
     config_directory.mkdir(mode=0o755, parents=True, exist_ok=True)
     config_directory.chmod(0o755)
@@ -89,6 +90,7 @@ def main():
     )
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as config:
+            # Only root reads this file; systemd passes values to the API.
             os.fchmod(config.fileno(), 0o600)
             for name, value in settings.items():
                 config.write(f"{name}={json.dumps(value)}\n")
