@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Three-Tier Guestbook</title>
+</head>
+<body>
+  <header>
+    <h1>Three-Tier Guestbook</h1>
+    <p>Web tier → application tier → database tier</p>
+  </header>
+
+  <main>
+    <form id="message-form">
+      <label for="message">Leave a message</label>
+      <br>
+      <textarea
+        id="message"
+        name="message"
+        rows="4"
+        cols="50"
+        maxlength="500"
+        required
+      ></textarea>
+      <br>
+      <button id="submit-button" type="submit">Save message</button>
+    </form>
+
+    <p id="status" role="status" aria-live="polite"></p>
+
+    <h2>Latest messages</h2>
+    <button id="refresh-button" type="button">Refresh messages</button>
+    <ul id="messages"></ul>
+  </main>
+
+  <script>
+    const form = document.getElementById("message-form");
+    const input = document.getElementById("message");
+    const submitButton = document.getElementById("submit-button");
+    const refreshButton = document.getElementById("refresh-button");
+    const status = document.getElementById("status");
+    const messages = document.getElementById("messages");
+
+    async function requestJson(url, options) {
+      const response = await fetch(url, options);
+
+      if (!response.ok) {
+        throw new Error(`Request failed (HTTP ${response.status}).`);
+      }
+
+      return response.json();
+    }
+
+    async function loadMessages() {
+      const data = await requestJson("/api/messages");
+      messages.replaceChildren();
+
+      for (const entry of data.messages) {
+        const item = document.createElement("li");
+
+        // Render visitor input as text, never as HTML.
+        item.textContent = entry.message;
+        messages.appendChild(item);
+      }
+
+      if (data.messages.length === 0) {
+        const item = document.createElement("li");
+        item.textContent = "No messages yet.";
+        messages.appendChild(item);
+      }
+    }
+
+    async function refreshMessages() {
+      refreshButton.disabled = true;
+      status.textContent = "Loading messages...";
+
+      try {
+        await loadMessages();
+        status.textContent = "Messages loaded.";
+      } catch (error) {
+        console.error(error);
+        status.textContent = "Could not load messages. Please try again.";
+      } finally {
+        refreshButton.disabled = false;
+      }
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const message = input.value.trim();
+      if (!message) {
+        status.textContent = "Enter a message before saving.";
+        return;
+      }
+
+      submitButton.disabled = true;
+      status.textContent = "Saving...";
+
+      try {
+        await requestJson("/api/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message }),
+        });
+      } catch (error) {
+        console.error(error);
+        status.textContent =
+          "Save could not be confirmed. Refresh before trying again.";
+        return;
+      } finally {
+        submitButton.disabled = false;
+      }
+
+      form.reset();
+
+      try {
+        await loadMessages();
+        status.textContent = "Message saved.";
+      } catch (error) {
+        console.error(error);
+        status.textContent =
+          "Message saved, but the list could not refresh. Use Refresh messages.";
+      }
+    });
+
+    refreshButton.addEventListener("click", refreshMessages);
+    refreshMessages();
+  </script>
+</body>
+</html>
