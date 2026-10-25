@@ -2,6 +2,7 @@ AWSTemplateFormatVersion: 2010-09-09
 Description: CloudFormation Template for WebServer with Security Group and EC2 Instance
 
 Parameters:
+  # The sandbox provides this profile and blocks creation of custom IAM roles.
   ExistingInstanceProfileName:
     Description: Name of an existing IAM instance profile with access to read the website bucket
     Type: String
@@ -46,6 +47,7 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
+  # Deny unencrypted S3 requests without giving public access.
   WebsiteBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:

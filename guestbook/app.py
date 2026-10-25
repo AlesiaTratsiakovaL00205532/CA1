@@ -38,6 +38,7 @@ def handle_database_error(error):
 
 @app.get("/api/health")
 def health():
+    # Database access is needed, not only a running HTTP server.
     with connect_database() as connection:
         with connection.cursor() as cursor:
             cursor.execute("SELECT 1")
