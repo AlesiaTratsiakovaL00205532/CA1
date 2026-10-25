@@ -84,7 +84,7 @@ Resources:
         - DeviceName: /dev/xvda
           Ebs:
             Encrypted: true
-            VolumeType: gp3
+            VolumeType: gp2
             VolumeSize: 8
             DeleteOnTermination: true
       ImageId: !Ref LatestAmiId
@@ -95,7 +95,7 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           set -euo pipefail
-          dnf install -y httpd awscli2
+          dnf install -y httpd awscli-2
 
           # Download safely: replace the live page only after a successful transfer.
           cat > /usr/local/bin/update-website <<'SCRIPT'

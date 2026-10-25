@@ -1,0 +1,460 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Three-tier guestbook with separate web, application, and database tiers
+
+Parameters:
+  ExistingInstanceProfileName:
+    Description: Existing EC2 instance profile
+    Type: String
+    Default: LabInstanceProfile
+    MinLength: 1
+    MaxLength: 128
+    AllowedPattern: '^[A-Za-z0-9_+=,.@-]+$'
+
+  DatabasePasswordParameterName:
+    Description: Name of an existing SSM SecureString containing the database administrator password
+    Type: String
+    Default: /ca1/guestbook/database-password
+    AllowedPattern: '^/[A-Za-z0-9_./-]+$'
+
+  LatestAmiId:
+    Description: Latest Amazon Linux 2023 x86-64 AMI
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+  InstanceType:
+    Description: EC2 instance type for the web and application servers
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.micro
+      - t3.small
+
+Resources:
+  GuestbookVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.20.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-vpc'
+
+  WebSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GuestbookVpc
+      CidrBlock: 10.20.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+  ApplicationSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GuestbookVpc
+      CidrBlock: 10.20.2.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+
+  DatabaseSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GuestbookVpc
+      CidrBlock: 10.20.3.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+
+  DatabaseSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GuestbookVpc
+      CidrBlock: 10.20.4.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: false
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref GuestbookVpc
+      InternetGatewayId: !Ref InternetGateway
+
+  WebRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref GuestbookVpc
+
+  WebDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref WebRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  WebSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref WebSubnet
+      RouteTableId: !Ref WebRouteTable
+
+  ApplicationRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref GuestbookVpc
+
+  ApplicationSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref ApplicationSubnet
+      RouteTableId: !Ref ApplicationRouteTable
+
+  DatabaseRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref GuestbookVpc
+
+  DatabaseSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DatabaseSubnetA
+      RouteTableId: !Ref DatabaseRouteTable
+
+  DatabaseSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DatabaseSubnetB
+      RouteTableId: !Ref DatabaseRouteTable
+
+  NatElasticIp:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  ApplicationNatGateway:
+    Type: AWS::EC2::NatGateway
+    DependsOn:
+      - WebDefaultRoute
+      - WebSubnetRouteTableAssociation
+    Properties:
+      AllocationId: !GetAtt NatElasticIp.AllocationId
+      SubnetId: !Ref WebSubnet
+
+  ApplicationDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref ApplicationRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref ApplicationNatGateway
+
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow public HTTP access to the guestbook web tier
+      VpcId: !Ref GuestbookVpc
+      SecurityGroupIngress:
+        - Description: Public website access
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  ApplicationSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow API requests only from the web tier
+      VpcId: !Ref GuestbookVpc
+      SecurityGroupIngress:
+        - Description: Web tier to application API
+          IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourceSecurityGroupId: !GetAtt WebSecurityGroup.GroupId
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow MySQL connections only from the application tier
+      VpcId: !Ref GuestbookVpc
+      SecurityGroupIngress:
+        - Description: Application tier to MySQL
+          IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !GetAtt ApplicationSecurityGroup.GroupId
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnets for the guestbook database
+      SubnetIds:
+        - !Ref DatabaseSubnetA
+        - !Ref DatabaseSubnetB
+
+  GuestbookDatabase:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      Engine: mysql
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: '20'
+      StorageType: gp2
+      StorageEncrypted: true
+
+      DBName: guestbook
+      MasterUsername: guestbookadmin
+      MasterUserPassword: !Sub '{{resolve:ssm-secure:${DatabasePasswordParameterName}}}'
+
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups:
+        - !GetAtt DatabaseSecurityGroup.GroupId
+      Port: 3306
+      PubliclyAccessible: false
+      MultiAZ: false
+      MonitoringInterval: 0
+
+      BackupRetentionPeriod: 1
+      AutoMinorVersionUpgrade: true
+      CopyTagsToSnapshot: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-database'
+
+  ApplicationCodeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  ApplicationServer:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - ApplicationDefaultRoute
+      - ApplicationSubnetRouteTableAssociation
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref ExistingInstanceProfileName
+      SubnetId: !Ref ApplicationSubnet
+      SecurityGroupIds:
+        - !GetAtt ApplicationSecurityGroup.GroupId
+
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            Encrypted: true
+            VolumeType: gp2
+            VolumeSize: 8
+            DeleteOnTermination: true
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-application'
+
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          dnf install -y python3 python3-pip awscli-2
+
+          install -d -m 755 /opt/guestbook
+          install -d -m 700 /var/lib/guestbook
+
+          # Fetch the installer again on each provisioning attempt.
+          cat > /usr/local/bin/provision-guestbook <<'SCRIPT'
+          #!/bin/bash
+          set -euo pipefail
+          aws s3 cp "s3://$CODE_BUCKET/setup.sh" /opt/guestbook/setup.sh \
+            --region "$AWS_REGION" --only-show-errors
+          sed -i 's/\r$//' /opt/guestbook/setup.sh
+          bash /opt/guestbook/setup.sh
+          SCRIPT
+          chmod 700 /usr/local/bin/provision-guestbook
+
+          cat > /etc/systemd/system/guestbook-provision.service <<'SERVICE'
+          [Unit]
+          Description=Provision the guestbook application
+          Wants=network-online.target
+          After=network-online.target
+          ConditionPathExists=!/var/lib/guestbook/initialized
+
+          [Service]
+          Type=oneshot
+          Environment="AWS_REGION=${AWS::Region}"
+          Environment="CODE_BUCKET=${ApplicationCodeBucket}"
+          Environment="DB_HOST=${GuestbookDatabase.Endpoint.Address}"
+          Environment="DB_ADMIN_PARAMETER=${DatabasePasswordParameterName}"
+          ExecStart=/usr/local/bin/provision-guestbook
+          TimeoutStartSec=900
+          SERVICE
+
+          # Retry while deployment files are missing or setup has failed.
+          cat > /etc/systemd/system/guestbook-provision.timer <<'TIMER'
+          [Unit]
+          Description=Retry guestbook provisioning until successful
+
+          [Timer]
+          OnBootSec=30s
+          OnUnitInactiveSec=60s
+          Unit=guestbook-provision.service
+
+          [Install]
+          WantedBy=timers.target
+          TIMER
+
+          systemctl daemon-reload
+          systemctl enable --now guestbook-provision.timer
+
+  WebServer:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - WebDefaultRoute
+      - WebSubnetRouteTableAssociation
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref ExistingInstanceProfileName
+      SubnetId: !Ref WebSubnet
+      SecurityGroupIds:
+        - !GetAtt WebSecurityGroup.GroupId
+
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            Encrypted: true
+            VolumeType: gp2
+            VolumeSize: 8
+            DeleteOnTermination: true
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-web'
+
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          dnf install -y nginx awscli-2
+
+          install -d -m 755 /var/www/guestbook
+
+          # Serve the frontend and forward API requests over the private network.
+          cat > /etc/nginx/nginx.conf <<'NGINX'
+          user nginx;
+          worker_processes auto;
+          error_log /var/log/nginx/error.log;
+          pid /run/nginx.pid;
+
+          events {
+              worker_connections 1024;
+          }
+
+          http {
+              include /etc/nginx/mime.types;
+              default_type application/octet-stream;
+              access_log /var/log/nginx/access.log;
+              sendfile on;
+              server_tokens off;
+
+              server {
+                  listen 80;
+                  server_name _;
+                  root /var/www/guestbook;
+                  index index.html;
+                  client_max_body_size 4k;
+
+                  location / {
+                      try_files $uri $uri/ =404;
+                  }
+
+                  location /api/ {
+                      proxy_pass http://${ApplicationServer.PrivateIp}:8000;
+                      proxy_connect_timeout 5s;
+                      proxy_read_timeout 30s;
+                  }
+              }
+          }
+          NGINX
+
+          nginx -t
+
+          # Replace the page only after a successful S3 download.
+          cat > /usr/local/bin/update-guestbook-page <<'SCRIPT'
+          #!/bin/bash
+          set -euo pipefail
+          temp_file=$(mktemp /var/www/guestbook/.index.XXXXXX)
+          trap 'rm -f "$temp_file"' EXIT
+
+          aws s3 cp 's3://${ApplicationCodeBucket}/index.html' "$temp_file" \
+            --region '${AWS::Region}' --only-show-errors
+          test -s "$temp_file"
+          chmod 644 "$temp_file"
+          mv -f "$temp_file" /var/www/guestbook/index.html
+          systemctl enable --now nginx
+          SCRIPT
+          chmod 700 /usr/local/bin/update-guestbook-page
+
+          cat > /etc/systemd/system/guestbook-page.service <<'SERVICE'
+          [Unit]
+          Description=Download the guestbook frontend
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/update-guestbook-page
+          SERVICE
+
+          cat > /etc/systemd/system/guestbook-page.timer <<'TIMER'
+          [Unit]
+          Description=Refresh the guestbook frontend every minute
+
+          [Timer]
+          OnBootSec=30s
+          OnUnitInactiveSec=60s
+          Unit=guestbook-page.service
+
+          [Install]
+          WantedBy=timers.target
+          TIMER
+
+          systemctl daemon-reload
+          systemctl enable --now guestbook-page.timer
+
+Outputs:
+  DatabaseEndpoint:
+    Description: Private database hostname for the application tier
+    Value: !GetAtt GuestbookDatabase.Endpoint.Address
+
+  ApplicationInstanceId:
+    Description: Private application instance for Session Manager access
+    Value: !Ref ApplicationServer
+
+  ApplicationCodeBucketName:
+    Description: Private bucket for guestbook application deployment files
+    Value: !Ref ApplicationCodeBucket
+
+  GuestbookURL:
+    Description: Public URL of the three-tier guestbook
+    Value: !Sub 'http://${WebServer.PublicDnsName}'
